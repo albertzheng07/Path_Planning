@@ -8,6 +8,7 @@
 #include "Eigen-3.3/Eigen/Core"
 #include "Eigen-3.3/Eigen/QR"
 #include "json.hpp"
+#include "spline.h"
 
 using namespace std;
 
@@ -200,6 +201,8 @@ int main() {
   	map_waypoints_dy.push_back(d_y);
   }
 
+
+
   h.onMessage([&map_waypoints_x,&map_waypoints_y,&map_waypoints_s,&map_waypoints_dx,&map_waypoints_dy](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
                      uWS::OpCode opCode) {
     // "42" at the start of the message means there's a websocket message event.
@@ -207,6 +210,16 @@ int main() {
     // The 2 signifies a websocket event
     //auto sdata = string(data).substr(0, length);
     //cout << sdata << endl;
+    
+    // starting line
+    
+    int starting_lane = 1;
+
+    
+    // target velocity
+    
+    double target_vel = 48.0; // mph
+
     if (length && length > 2 && data[0] == '4' && data[1] == '2') {
 
       auto s = hasData(data);
@@ -242,8 +255,125 @@ int main() {
           	vector<double> next_x_vals;
           	vector<double> next_y_vals;
 
+            int prev_path_size = previous_path_x.size();
 
           	// TODO: define a path made up of (x,y) points that the car will visit sequentially every .02 seconds
+            
+            // vector of x,y points in global frame
+            vector <double> ptsx;
+            vector <double> ptsy;
+
+            // starting reference states
+            double ref_x = car_x;
+            double ref_y = car_y;
+            double ref_yaw = deg2rad(car_yaw);
+            double prev_car_x = car_x;
+            double prev_car_y = car_y;
+          
+            // check previous path size (minimum of 2 pts to use previous path otherwise create a new previous pt)
+            if (prev_path_size < 2)
+            {
+              // prev_car_x = ref_x - cos(ref_yaw);
+              // prev_car_y = ref_y - sin(ref_yaw);
+               prev_car_x = ref_x - cos(car_yaw);
+               prev_car_y = ref_y - sin(car_yaw);
+            }
+            else           
+            {
+              ref_x = previous_path_x[prev_path_size-1]; // end pt
+              ref_y = previous_path_y[prev_path_size-1];
+
+              prev_car_x = previous_path_x[prev_path_size-2]; // end pt -1
+              prev_car_y = previous_path_y[prev_path_size-2];
+
+              // calculate yaw between pts
+              ref_yaw = atan2(ref_y-prev_car_y,ref_x-prev_car_x);
+            }
+
+            // generate 1st two pts from either previous points or use current point
+            ptsx.push_back(prev_car_x);
+            ptsx.push_back(ref_x);
+            ptsy.push_back(prev_car_y);
+            ptsy.push_back(ref_y);
+
+            // generate 3 pts from the frenet coordinate frame ahead of the initial reference way point
+
+            vector <vector <double>> nextWaypoint;
+
+            int lane_value = 2+4*starting_lane;
+            vector <double> dist_ahead = {30.0,60.0,90.0};
+
+            for (int i = 0; i<dist_ahead.size(); i++)
+            {
+              nextWaypoint.push_back(getXY(car_s+dist_ahead[i],lane_value,map_waypoints_s,map_waypoints_x,map_waypoints_y));
+              
+              ptsx.push_back(nextWaypoint[i][0]);
+              ptsy.push_back(nextWaypoint[i][1]);              
+            }
+
+            static int count = 0;
+
+            cout << "count = " << count++ << endl;
+
+            // rotate global car pts to body coordinate frame from current x,y, psi
+            for (int i = 0; i < ptsx.size(); i++)
+            {
+              double delta_x = ptsx[i]-ref_x;
+              double delta_y = ptsy[i]-ref_y;
+
+              ptsx[i] = delta_x*cos(ref_yaw)+delta_y*sin(ref_yaw);
+              ptsy[i] = -delta_x*sin(ref_yaw)+delta_y*cos(ref_yaw);
+
+              cout << "Ptx " << i << " = "<< ptsx[i] << endl;
+              cout << "Pty " << i << " = "<< ptsy[i] << endl;              
+            }
+
+            // generate spline 
+            tk::spline s;
+
+            // set x y points on spline
+            s.set_points(ptsx,ptsy);
+
+            // set the actual x,y for the planner
+
+            // push in previous path first
+            for (int i = 0; i < prev_path_size; i++)
+            {
+              next_x_vals.push_back(previous_path_x[i]);
+              next_y_vals.push_back(previous_path_y[i]);              
+            }
+
+            // generate finite horizon at target distance away using spline
+            double target_x = 30.0;
+            double target_y = s(target_x);
+            double target_dist = sqrt(pow(target_x,2)+pow(target_y,2));
+            double x_step_add = 0;
+            double dt = 0.02;
+            double mph2mps = 1/2.24;
+
+            for (int i = 1; i < 50 - prev_path_size; i++)
+            {
+              double N_steps = target_dist/dt/(target_vel*mph2mps);
+              double x_point = x_step_add + target_x/N_steps;
+              double y_point = s(x_point);
+
+              x_step_add = x_point;
+
+              // new ref points
+              double x_ref = x_point;
+              double y_ref = y_point;
+
+              // rotate back to global coordinates for path planner
+              x_point = x_ref*cos(ref_yaw)-y_ref*sin(ref_yaw);
+              y_point = x_ref*sin(ref_yaw)+y_ref*cos(ref_yaw);
+
+              x_point += ref_x;
+              y_point += ref_y;
+
+              next_x_vals.push_back(x_point);
+              next_y_vals.push_back(y_point);
+            }
+
           	msgJson["next_x"] = next_x_vals;
           	msgJson["next_y"] = next_y_vals;
 
