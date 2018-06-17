@@ -35,6 +35,15 @@ string hasData(string s) {
   return "";
 }
 
+enum carState_t
+{
+  DRIVE_STRAIGHT = 0,
+  SLOW_DOWN = 1,
+  MAINTAIN_DIST = 2,  
+  LANE_SHIFT_LEFT = 3,
+  LANE_SHIFT_RIGHT = 4,
+};
+
 double distance(double x1, double y1, double x2, double y2)
 {
 	return sqrt((x2-x1)*(x2-x1)+(y2-y1)*(y2-y1));
@@ -201,6 +210,7 @@ int main() {
   	map_waypoints_dy.push_back(d_y);
   }
 
+  
 
 
   h.onMessage([&map_waypoints_x,&map_waypoints_y,&map_waypoints_s,&map_waypoints_dx,&map_waypoints_dy](uWS::WebSocket<uWS::SERVER> ws, char *data, size_t length,
@@ -210,15 +220,18 @@ int main() {
     // The 2 signifies a websocket event
     //auto sdata = string(data).substr(0, length);
     //cout << sdata << endl;
-    
-    // starting line
-    
-    int starting_lane = 1;
-
-    
+ 
+    const int starting_lane = 1;
+    static int current_lane = starting_lane;
+ 
     // target velocity
-    
-    double target_vel = 48.0; // mph
+    const double final_target_vel = 45.0; // mph
+    static double current_target_vel = 0.0;
+    static carState_t Vehicle_state = DRIVE_STRAIGHT;
+    static carState_t Prev_Vehicle_state = Vehicle_state;
+    //static double car_ahead_dist = 100000.0;
+    static double other_car_speed = 100000.0;
+    const double mph2mps = 1/2.24;
 
     if (length && length > 2 && data[0] == '4' && data[1] == '2') {
 
@@ -273,8 +286,6 @@ int main() {
             // check previous path size (minimum of 2 pts to use previous path otherwise create a new previous pt)
             if (prev_path_size < 2)
             {
-              // prev_car_x = ref_x - cos(ref_yaw);
-              // prev_car_y = ref_y - sin(ref_yaw);
                prev_car_x = ref_x - cos(car_yaw);
                prev_car_y = ref_y - sin(car_yaw);
             }
@@ -296,11 +307,171 @@ int main() {
             ptsy.push_back(prev_car_y);
             ptsy.push_back(ref_y);
 
-            // generate 3 pts from the frenet coordinate frame ahead of the initial reference way point
+            const double accel_target = 0.5; // 0.05 g
+            const double decel_target = 1.0; // 0.2 g
+            const double min_speed = 15; // min speed
 
+            cout << "current velocity = " << current_target_vel << endl;
+
+
+            double car_ahead_dist = 100000;
+
+            // check all surrounding cars
+            for (int i = 0; i < sensor_fusion.size(); i++)
+            {
+              // check if other car is in my lane
+              float d = sensor_fusion[i][6]; // lateral frenet distance of other car from my car
+              if (d < (2+4*current_lane+1) && d > (2+4*current_lane-1) )
+              {
+                double other_car_vx = sensor_fusion[i][3];
+                double other_car_vy = sensor_fusion[i][4];
+                double other_car_s = sensor_fusion[i][5];
+                // use previous path to project car's distance into the future
+                other_car_s += (double)0.02*other_car_speed*prev_path_size;
+
+                // get the lowest car dist
+                if (other_car_s-car_s > 0.0 && (other_car_s-car_s) < car_ahead_dist)
+                {  
+                  other_car_speed = sqrt(other_car_vx*other_car_vx+other_car_vy*other_car_vy);
+                  car_ahead_dist = other_car_s-car_s;
+                }
+              }
+            }
+
+            cout << "Car Dist Ahead = " << car_ahead_dist << endl;
+            cout << "Vehicle Current State = " << Vehicle_state << endl;
+
+            // const max_decel = 0.5;
+            // Vehicle State Machine Actions
+            switch (Vehicle_state) {  
+             case (DRIVE_STRAIGHT):
+             {
+               if (current_target_vel < final_target_vel) {
+                   current_target_vel += accel_target;
+               }
+             } break; 
+             case (SLOW_DOWN):
+             {
+                // if (current_target_vel > min_speed && other_car_speed < current_target_vel)
+                // {  
+                //   current_target_vel -= max_decel*(car_ahead_dist-60)/60;
+                // } // decel to other car speed
+
+                /* Position Loop */
+                double Target_Dist = 80.0;
+                double position_err = Target_Dist-car_ahead_dist;
+                double velocity_cmd = -0.1*position_err;
+                velocity_cmd += other_car_speed*1.0/mph2mps;
+                double accel_cmd = 0.05*(velocity_cmd - current_target_vel);
+                cout << "position_err = " << position_err << endl;                
+                cout << "velocity_cmd = " << velocity_cmd << endl;
+                cout << "accel_cmd = " << accel_cmd << endl;
+                cout << "Current target velocity = " << current_target_vel << endl;
+
+                if (accel_cmd > accel_target)
+                {
+                   accel_cmd = accel_target;
+                }
+                else if (accel_cmd < -decel_target)
+                {
+                   accel_cmd = -decel_target;
+                }
+                current_target_vel += accel_cmd;
+                cout << "Final Accel Command = " << accel_cmd << endl;
+                cout << "Update target velocity = " << current_target_vel << endl;
+
+
+             } break;
+             case (MAINTAIN_DIST):
+             {
+               // double target_dist = 120;
+               // double dist_error = car_ahead_dist-target_dist; 
+               double velocity_error = current_target_vel-other_car_speed;
+               double accel_cmd = -0.01*velocity_error;
+               // cout << "Distance Error = " << dist_error << endl;
+               // /* Position Prop. controller to maintain distance */
+               // double accel_cmd = 0.001*dist_error*0.02*0.02;
+               // // clip the accel cmd
+               if (accel_cmd > accel_target)
+               {
+                  accel_cmd = accel_target;
+               }
+               else if (accel_cmd < decel_target)
+               {
+                  accel_cmd = decel_target;
+               }
+               if (current_target_vel < 45.0 && current_target_vel > min_speed)
+               {
+                  current_target_vel += accel_cmd; 
+               }
+               cout << "velocity error = " << velocity_error<< endl;
+               cout << "accel cmd = " << accel_cmd << endl;
+
+             } break;              
+             // case (LANE_SHIFT_LEFT):
+             // {
+             // } break;
+             // case (LANE_SHIFT_RIGHT):
+             // {
+             // } break;
+            } 
+            // State machine transitions
+            switch (Vehicle_state) {  
+             case (DRIVE_STRAIGHT):
+             {
+                if (car_ahead_dist > 0 && car_ahead_dist < 80) // check if car is close and ahead of our car
+                {
+                  Vehicle_state = SLOW_DOWN; // slow down if that occurs
+                }
+             } break; 
+             case (SLOW_DOWN):
+             {
+                if (car_ahead_dist < 0 || car_ahead_dist > 120)
+                {  
+                  Vehicle_state = DRIVE_STRAIGHT;
+                }
+
+             } break;
+             case (MAINTAIN_DIST):
+             {
+                // if (car_ahead_dist > 0 && car_ahead_dist > 200)
+                // {  
+                //   Vehicle_state = DRIVE_STRAIGHT;
+                // }
+                // if (car_ahead_dist > 0 && car_ahead_dist < 60)
+                // {  
+                //   Vehicle_state = SLOW_DOWN;
+                // }                          
+               // Check if left lane exists and is free
+               // Vehicle_state =  LANE_SHIFT_LEFT
+               // Check if right lane exists and is free
+               // Vehicle_state =  LANE_SHIFT_LEFT 
+               // car_ahead_dist = 100000.0; // reinit
+               // other_car_speed = 100000.0; 
+
+             } break;            
+             // case (LANE_SHIFT_LEFT):
+             // {
+             //    // Vehicle_state = DRIVE_STRAIGHT;
+             // } break;
+             // case (LANE_SHIFT_RIGHT):
+             // {
+             //    // Vehicle_state = DRIVE_STRAIGHT;              
+             // } break;
+            }
+
+            if (Vehicle_state != Prev_Vehicle_state)
+            {
+              cout << "Vehicle State Transition to " << Vehicle_state << endl;
+            }  
+
+            Prev_Vehicle_state = Vehicle_state;
+
+
+            // generate 3 pts from the frenet coordinate frame ahead of the initial reference way point
             vector <vector <double>> nextWaypoint;
 
-            int lane_value = 2+4*starting_lane;
+            int lane_value = 2+4*current_lane;
             vector <double> dist_ahead = {30.0,60.0,90.0};
 
             for (int i = 0; i<dist_ahead.size(); i++)
@@ -311,10 +482,6 @@ int main() {
               ptsy.push_back(nextWaypoint[i][1]);              
             }
 
-            static int count = 0;
-
-            cout << "count = " << count++ << endl;
-
             // rotate global car pts to body coordinate frame from current x,y, psi
             for (int i = 0; i < ptsx.size(); i++)
             {
@@ -323,9 +490,7 @@ int main() {
 
               ptsx[i] = delta_x*cos(ref_yaw)+delta_y*sin(ref_yaw);
               ptsy[i] = -delta_x*sin(ref_yaw)+delta_y*cos(ref_yaw);
-
-              cout << "Ptx " << i << " = "<< ptsx[i] << endl;
-              cout << "Pty " << i << " = "<< ptsy[i] << endl;              
+             
             }
 
             // generate spline 
@@ -349,11 +514,10 @@ int main() {
             double target_dist = sqrt(pow(target_x,2)+pow(target_y,2));
             double x_step_add = 0;
             double dt = 0.02;
-            double mph2mps = 1/2.24;
 
             for (int i = 1; i < 50 - prev_path_size; i++)
             {
-              double N_steps = target_dist/dt/(target_vel*mph2mps);
+              double N_steps = target_dist/dt/(current_target_vel*mph2mps);
               double x_point = x_step_add + target_x/N_steps;
               double y_point = s(x_point);
 
