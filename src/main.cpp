@@ -37,11 +37,10 @@ string hasData(string s) {
 
 enum carState_t
 {
-  DRIVE_STRAIGHT = 0,
-  SLOW_DOWN = 1,
-  MAINTAIN_DIST = 2,  
-  LANE_SHIFT_LEFT = 3,
-  LANE_SHIFT_RIGHT = 4,
+  CRUISE_CONTROL = 0,
+  POSITION_VELOCITY_HOLD = 1,  
+  LANE_SHIFT_LEFT = 2,
+  LANE_SHIFT_RIGHT = 3,
 };
 
 double distance(double x1, double y1, double x2, double y2)
@@ -227,9 +226,8 @@ int main() {
     // target velocity
     const double final_target_vel = 45.0; // mph
     static double current_target_vel = 0.0;
-    static carState_t Vehicle_state = DRIVE_STRAIGHT;
+    static carState_t Vehicle_state = CRUISE_CONTROL;
     static carState_t Prev_Vehicle_state = Vehicle_state;
-    //static double car_ahead_dist = 100000.0;
     static double other_car_speed = 100000.0;
     const double mph2mps = 1/2.24;
 
@@ -307,14 +305,14 @@ int main() {
             ptsy.push_back(prev_car_y);
             ptsy.push_back(ref_y);
 
-            const double accel_target = 0.5; // 0.05 g
-            const double decel_target = 1.0; // 0.2 g
+            const double accel_max = 0.5; // 0.05 g
+            const double decel_max = 2.0; // 0.2 g
             const double min_speed = 15; // min speed
 
-            cout << "current velocity = " << current_target_vel << endl;
-
+            // cout << "current velocity = " << current_target_vel << endl;
 
             double car_ahead_dist = 100000;
+            double other_car_speed = 100000;
 
             // check all surrounding cars
             for (int i = 0; i < sensor_fusion.size(); i++)
@@ -328,8 +326,7 @@ int main() {
                 double other_car_s = sensor_fusion[i][5];
                 // use previous path to project car's distance into the future
                 other_car_s += (double)0.02*other_car_speed*prev_path_size;
-
-                // get the lowest car dist
+                // get the closest car dist and speed
                 if (other_car_s-car_s > 0.0 && (other_car_s-car_s) < car_ahead_dist)
                 {  
                   other_car_speed = sqrt(other_car_vx*other_car_vx+other_car_vy*other_car_vy);
@@ -344,13 +341,13 @@ int main() {
             // const max_decel = 0.5;
             // Vehicle State Machine Actions
             switch (Vehicle_state) {  
-             case (DRIVE_STRAIGHT):
+             case (CRUISE_CONTROL):
              {
                if (current_target_vel < final_target_vel) {
-                   current_target_vel += accel_target;
+                   current_target_vel += accel_max;
                }
              } break; 
-             case (SLOW_DOWN):
+             case (POSITION_VELOCITY_HOLD):
              {
                 // if (current_target_vel > min_speed && other_car_speed < current_target_vel)
                 // {  
@@ -358,56 +355,29 @@ int main() {
                 // } // decel to other car speed
 
                 /* Position Loop */
-                double Target_Dist = 80.0;
+                double Target_Dist = 40.0;
                 double position_err = Target_Dist-car_ahead_dist;
                 double velocity_cmd = -0.1*position_err;
-                velocity_cmd += other_car_speed*1.0/mph2mps;
+                /* Velocity Loop */
+                velocity_cmd += other_car_speed*1.0/mph2mps; /* Relative to car in front */
                 double accel_cmd = 0.05*(velocity_cmd - current_target_vel);
-                cout << "position_err = " << position_err << endl;                
-                cout << "velocity_cmd = " << velocity_cmd << endl;
-                cout << "accel_cmd = " << accel_cmd << endl;
-                cout << "Current target velocity = " << current_target_vel << endl;
+                // cout << "position_err = " << position_err << endl;                
+                // cout << "velocity_cmd = " << velocity_cmd << endl;
+                // cout << "accel_cmd = " << accel_cmd << endl;
+                // cout << "Current target velocity = " << current_target_vel << endl;
 
-                if (accel_cmd > accel_target)
+                if (accel_cmd > accel_max)
                 {
-                   accel_cmd = accel_target;
+                   accel_cmd = accel_max;
                 }
-                else if (accel_cmd < -decel_target)
+                else if (accel_cmd < -decel_max)
                 {
-                   accel_cmd = -decel_target;
+                   accel_cmd = -decel_max;
                 }
                 current_target_vel += accel_cmd;
-                cout << "Final Accel Command = " << accel_cmd << endl;
-                cout << "Update target velocity = " << current_target_vel << endl;
-
-
-             } break;
-             case (MAINTAIN_DIST):
-             {
-               // double target_dist = 120;
-               // double dist_error = car_ahead_dist-target_dist; 
-               double velocity_error = current_target_vel-other_car_speed;
-               double accel_cmd = -0.01*velocity_error;
-               // cout << "Distance Error = " << dist_error << endl;
-               // /* Position Prop. controller to maintain distance */
-               // double accel_cmd = 0.001*dist_error*0.02*0.02;
-               // // clip the accel cmd
-               if (accel_cmd > accel_target)
-               {
-                  accel_cmd = accel_target;
-               }
-               else if (accel_cmd < decel_target)
-               {
-                  accel_cmd = decel_target;
-               }
-               if (current_target_vel < 45.0 && current_target_vel > min_speed)
-               {
-                  current_target_vel += accel_cmd; 
-               }
-               cout << "velocity error = " << velocity_error<< endl;
-               cout << "accel cmd = " << accel_cmd << endl;
-
-             } break;              
+                // cout << "Final Accel Command = " << accel_cmd << endl;
+                // cout << "Update target velocity = " << current_target_vel << endl;
+             } break;            
              // case (LANE_SHIFT_LEFT):
              // {
              // } break;
@@ -417,23 +387,19 @@ int main() {
             } 
             // State machine transitions
             switch (Vehicle_state) {  
-             case (DRIVE_STRAIGHT):
+             case (CRUISE_CONTROL):
              {
-                if (car_ahead_dist > 0 && car_ahead_dist < 80) // check if car is close and ahead of our car
+                if (car_ahead_dist > 0 && car_ahead_dist < 60) // check if car is close and ahead of our car
                 {
-                  Vehicle_state = SLOW_DOWN; // slow down if that occurs
+                  Vehicle_state = POSITION_VELOCITY_HOLD; // slow down if that occurs
                 }
              } break; 
-             case (SLOW_DOWN):
+             case (POSITION_VELOCITY_HOLD):
              {
                 if (car_ahead_dist < 0 || car_ahead_dist > 120)
                 {  
-                  Vehicle_state = DRIVE_STRAIGHT;
+                  Vehicle_state = CRUISE_CONTROL;
                 }
-
-             } break;
-             case (MAINTAIN_DIST):
-             {
                 // if (car_ahead_dist > 0 && car_ahead_dist > 200)
                 // {  
                 //   Vehicle_state = DRIVE_STRAIGHT;
@@ -447,9 +413,8 @@ int main() {
                // Check if right lane exists and is free
                // Vehicle_state =  LANE_SHIFT_LEFT 
                // car_ahead_dist = 100000.0; // reinit
-               // other_car_speed = 100000.0; 
-
-             } break;            
+               // other_car_speed = 100000.0;
+             } break;          
              // case (LANE_SHIFT_LEFT):
              // {
              //    // Vehicle_state = DRIVE_STRAIGHT;
@@ -460,13 +425,12 @@ int main() {
              // } break;
             }
 
-            if (Vehicle_state != Prev_Vehicle_state)
-            {
-              cout << "Vehicle State Transition to " << Vehicle_state << endl;
-            }  
+            // if (Vehicle_state != Prev_Vehicle_state)
+            // {
+            //   cout << "Vehicle State Transition to " << Vehicle_state << endl;
+            // }  
 
             Prev_Vehicle_state = Vehicle_state;
-
 
             // generate 3 pts from the frenet coordinate frame ahead of the initial reference way point
             vector <vector <double>> nextWaypoint;
