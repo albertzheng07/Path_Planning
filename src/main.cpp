@@ -225,7 +225,7 @@ int main() {
     static int current_lane = starting_lane;
  
     // target velocity
-    const double final_target_vel = 45.0; // mph
+    const double cruise_target_vel = 45.0; // mph
     static double current_target_vel = 0.0;
     static carState_t Vehicle_state = CRUISE_CONTROL;
     static carState_t Prev_Vehicle_state = Vehicle_state;
@@ -316,7 +316,6 @@ int main() {
             double other_car_speed = 100000;
             double left_car_speed = 100000;
             double left_car_dist = 100000;
-
             double right_car_speed = 100000;
             double right_car_dist = 100000;
 
@@ -344,8 +343,12 @@ int main() {
                 }
               }
 
+              // cout << "Car " << i << endl;
+              // cout << "d = " << d << endl;
+
+
               // check closest car in left lane
-              if (d < (2+4*current_lane-2) && d > (2+4*current_lane-4) )
+              if (d < (2+4*(current_lane-1)+2) && d > (2+4*(current_lane-1)-2) )
               {
                 double left_lane_car_vx = sensor_fusion[i][3];
                 double left_lane_car_vy = sensor_fusion[i][4];
@@ -353,6 +356,10 @@ int main() {
                 double car_speed = sqrt(left_lane_car_vx*left_lane_car_vx+left_lane_car_vy*left_lane_car_vy);
                 // use previous path to project car's distance into the future
                 left_lane_car_s += (double)0.02*car_speed*prev_path_size;
+
+                // cout << "left_lane_car_s =  " << left_lane_car_s << endl;
+                // cout << "left_car_dist =  "  << left_car_dist << endl;
+
                 // get the closest car dist and speed
                 if ( fabs(left_lane_car_s-car_s) < left_car_dist)
                 {  
@@ -362,7 +369,7 @@ int main() {
               }
 
               // check closest car in right lane
-              if (d < (2+4*current_lane+4) && d > (2+4*current_lane+2) )
+              if (d < (2+4*(current_lane+1)+2) && d > (2+4*(current_lane+1)-2) )
               {
                 double right_lane_car_vx = sensor_fusion[i][3];
                 double right_lane_car_vy = sensor_fusion[i][4];
@@ -370,6 +377,9 @@ int main() {
                 double car_speed = sqrt(right_lane_car_vx*right_lane_car_vx+right_lane_car_vy*right_lane_car_vy);
                 // use previous path to project car's distance into the future
                 right_lane_car_s += (double)0.02*car_speed*prev_path_size;
+
+                // cout << "right_lane_car_s =  " << right_lane_car_s << endl;
+                // cout << "right_car_dist =  "  << right_car_dist << endl;                
                 // get the closest car dist and speed
                 if ( fabs(right_lane_car_s-car_s) < right_car_dist)
                 {  
@@ -379,6 +389,9 @@ int main() {
               }              
             }
 
+            // cout << "Final left_car_dist =  "  << left_car_dist << endl;
+            // cout << "Final Right Car Dist = " << right_car_dist << endl;
+
             cout << "Car Dist Ahead = " << car_ahead_dist << endl;
             cout << "Left Car Dist = " << left_car_dist << endl;
             cout << "Right Car Dist = " << right_car_dist << endl;
@@ -387,14 +400,17 @@ int main() {
             cout << "Vehicle Current State = " << Vehicle_state << endl;
 
             const double Target_Dist = 40.0;
-            bool postion_vel_hold_stable = false;
+            static bool postion_vel_hold_stable = false;
+            static double lane_change_target_vel = 0;
+
             // Vehicle State Machine Actions
             switch (Vehicle_state) {  
              case (CRUISE_CONTROL):
-             {
-               if (current_target_vel < final_target_vel) {
-                   current_target_vel += accel_max;
-               }
+             {                
+                if (current_target_vel < cruise_target_vel) {
+                  current_target_vel += accel_max;
+                }    
+
              } break; 
              case (POSITION_VELOCITY_HOLD):
              {
@@ -408,6 +424,7 @@ int main() {
                 double velocity_cmd = -0.1*position_err;
                 /* Velocity Loop */
                 velocity_cmd += other_car_speed*1.0/mph2mps; /* Relative to car in front */
+
                 double velocity_err = velocity_cmd - current_target_vel;
                 double accel_cmd = 0.05*velocity_err;
                 // cout << "position_err = " << position_err << endl;                
@@ -423,43 +440,99 @@ int main() {
                    accel_cmd = -decel_max;
                 }
                 current_target_vel += accel_cmd;
+
+                if (current_target_vel > 50) // respect speed limit
+                {
+                  current_target_vel = 50;
+                }
+
                 // cout << "Final Accel Command = " << accel_cmd << endl;
                 // cout << "Update target velocity = " << current_target_vel << endl;
+                postion_vel_hold_stable = false;                
                 if (position_err < 5 && velocity_err < 5)
                 {
                     postion_vel_hold_stable = true;
                 }
 
-             } break;            
+             } break;
+             case (PREPARE_FOR_LANE):
+             {
+                // if (postion_vel_hold_stable == true)
+                // {
+                //   lane_change_target_vel = current_target_vel - 10;
+                //   if (lane_change_target_vel < min_speed)
+                //   {
+                //     lane_change_target_vel = min_speed;
+                //   }
+                //   postion_vel_hold_stable = false;
+                // }
+                // if (current_target_vel > lane_change_target_vel) {
+                //   current_target_vel -= decel_max;
+                // } 
+                double position_err = Target_Dist-car_ahead_dist;
+                double velocity_cmd = -0.1*position_err;
+                /* Velocity Loop */
+                velocity_cmd += other_car_speed*1.0/mph2mps; /* Relative to car in front */
+
+                double velocity_err = velocity_cmd - current_target_vel;
+                double accel_cmd = 0.05*velocity_err;
+                // cout << "position_err = " << position_err << endl;                
+                // cout << "velocity_cmd = " << velocity_cmd << endl;
+                // cout << "accel_cmd = " << accel_cmd << endl;
+
+                if (accel_cmd > accel_max)
+                {
+                   accel_cmd = accel_max;
+                }
+                else if (accel_cmd < -decel_max)
+                {
+                   accel_cmd = -decel_max;
+                }
+                current_target_vel += accel_cmd;
+
+                if (current_target_vel > 50) // respect speed limit
+                {
+                  current_target_vel = 50;
+                }
+
+                // cout << "Final Accel Command = " << accel_cmd << endl;
+                // cout << "Update target velocity = " << current_target_vel << endl;
+                postion_vel_hold_stable = false;                
+                if (position_err < 5 && velocity_err < 5)
+                {
+                    postion_vel_hold_stable = true;
+                }
+
+             }            
              case (LANE_SHIFT_LEFT):
              {                
                // command velocity decrease of 10 mps of when shifting lanes 
-              double velocity_err = last_position_velocity_hold_spd - current_target_vel;
-              double accel_cmd = 0.05*velocity_err;
-              if (accel_cmd > accel_max)
-              {
-                 accel_cmd = accel_max;
-              }
-              else if (accel_cmd < -decel_max)
-              {
-                 accel_cmd = -decel_max;
-              }
-              current_target_vel += accel_cmd;
+              // double velocity_err = last_position_velocity_hold_spd - current_target_vel;
+              // double accel_cmd = 0.05*velocity_err;
+              // if (accel_cmd > accel_max)
+              // {
+              //    accel_cmd = accel_max;
+              // }
+              // else if (accel_cmd < -decel_max)
+              // {
+              //    accel_cmd = -decel_max;
+              // }
+              // current_target_vel += accel_cmd;
               
              } break;
              case (LANE_SHIFT_RIGHT):
              {
-              double velocity_err = last_position_velocity_hold_spd - current_target_vel;
-              double accel_cmd = 0.05*velocity_err;
-              if (accel_cmd > accel_max)
-              {
-                 accel_cmd = accel_max;
-              }
-              else if (accel_cmd < -decel_max)
-              {
-                 accel_cmd = -decel_max;
-              }              
-              current_target_vel += accel_cmd;
+              // double velocity_err = last_position_velocity_hold_spd - current_target_vel;
+              // double accel_cmd = 0.05*velocity_err;
+              // if (accel_cmd > accel_max)
+              // {
+              //    accel_cmd = accel_max;
+              // }
+              // else if (accel_cmd < -decel_max)
+              // {
+              //    accel_cmd = -decel_max;
+              // }              
+              // current_target_vel += accel_cmd;
              } break;
             } 
             // State machine transitions
@@ -489,19 +562,16 @@ int main() {
                  // if stable be ready for turn
                 if (postion_vel_hold_stable == true)
                 { 
-                  // left lane check and car is enough away
-                  if (current_lane > 0 && fabs(left_car_dist) > 80 && current_target_vel-left_car_speed > 15 ) 
+                  if (current_lane > 0 && fabs(left_car_dist) > 50 && current_target_vel-left_car_speed > 20 ) 
                   {
-                    last_position_velocity_hold_spd = current_target_vel-10;
                     Vehicle_state =  LANE_SHIFT_LEFT;
                     current_lane -= 1; // change left
                   }
-                  else if (current_lane < 2 && fabs(right_car_dist) > 80 && current_target_vel-right_car_speed > 15 ) // right lane available
+                  else if (current_lane < 2 && fabs(right_car_dist) > 50 && current_target_vel-right_car_speed > 20 ) // right lane available
                   {
-                    last_position_velocity_hold_spd = current_target_vel-10;                           
                     Vehicle_state =  LANE_SHIFT_RIGHT;
                     current_lane += 1; // change right
-                  } 
+                  }
                 } 
 
                // Check if left lane exists and is free
@@ -510,20 +580,69 @@ int main() {
                // Vehicle_state =  LANE_SHIFT_LEFT 
                // car_ahead_dist = 100000.0; // reinit
                // other_car_speed = 100000.0;
-             } break;          
+             } break; 
+             case (PREPARE_FOR_LANE):
+             {
+                if (car_ahead_dist > 0 && car_ahead_dist < 30) // check if car is close and ahead of our car
+                {
+                  Vehicle_state = POSITION_VELOCITY_HOLD; // slow down if that occurs
+                }                
+                // if (fabs(lane_change_target_vel - current_target_vel) < 3)
+                // {
+                  // left lane check and car is enough away
+                  if (current_lane > 0 && fabs(left_car_dist) > 50 && current_target_vel-left_car_speed > 20 ) 
+                  {
+                    Vehicle_state =  LANE_SHIFT_LEFT;
+                    current_lane -= 1; // change left
+                  }
+                  else if (current_lane < 2 && fabs(right_car_dist) > 50 && current_target_vel-right_car_speed > 20 ) // right lane available
+                  {
+                    Vehicle_state =  LANE_SHIFT_RIGHT;
+                    current_lane += 1; // change right
+                  }
+                // }
+
+             } break;
+
              case (LANE_SHIFT_LEFT):
              {
-                if (fabs(last_position_velocity_hold_spd - current_target_vel) < 3)
+                // if (fabs(lane_change_target_vel- current_target_vel) < 3 && car_d > 2+4*current_lane-2 && car_d < 2+4*current_lane+2)
+                // {   
+                //   Vehicle_state = CRUISE_CONTROL; 
+                // }   
+                if (car_d > 2+4*current_lane-2 && car_d < 2+4*current_lane+2)
+                {      
+                  if (car_ahead_dist < 0 || car_ahead_dist > 120)
+                  {  
+                    Vehicle_state = CRUISE_CONTROL;
+                  }
+                } 
+                if (car_ahead_dist > 0 && car_ahead_dist < 30) // check if car is close and ahead of our car
                 {
-                  Vehicle_state = CRUISE_CONTROL;
-                }
+                  Vehicle_state = POSITION_VELOCITY_HOLD; // slow down if that occurs
+                }                                
              } break;
              case (LANE_SHIFT_RIGHT):
              {
-                if (fabs(last_position_velocity_hold_spd- current_target_vel) < 3)
-                {   
-                  Vehicle_state = CRUISE_CONTROL; 
-                }             
+                if (car_d > 2+4*current_lane-2 && car_d < 2+4*current_lane+2)
+                {  
+                  if (car_ahead_dist > 0 && car_ahead_dist < 30) // check if car is close and ahead of our car
+                  {
+                    Vehicle_state = POSITION_VELOCITY_HOLD; // slow down if that occurs
+                  }       
+                  if (car_ahead_dist < 0 || car_ahead_dist > 120)
+                  {  
+                    Vehicle_state = CRUISE_CONTROL;
+                  }
+                }
+                if (car_ahead_dist > 0 && car_ahead_dist < 30) // check if car is close and ahead of our car
+                {
+                  Vehicle_state = POSITION_VELOCITY_HOLD; // slow down if that occurs
+                } 
+                // if (fabs(lane_change_target_vel- current_target_vel) < 3 && car_d > 2+4*current_lane-2 && car_d < 2+4*current_lane+2)
+                // {   
+                //   Vehicle_state = CRUISE_CONTROL; 
+                // }             
              } break;
             }
 
@@ -538,7 +657,7 @@ int main() {
             vector <vector <double>> nextWaypoint;
 
             int lane_value = 2+4*current_lane;
-            vector <double> dist_ahead = {30.0,60.0,90.0};
+            vector <double> dist_ahead = {45.0,90.0,135.0};
 
             for (int i = 0; i<dist_ahead.size(); i++)
             {
@@ -575,7 +694,7 @@ int main() {
             }
 
             // generate finite horizon at target distance away using spline
-            double target_x = 30.0;
+            double target_x = 60.0;
             double target_y = s(target_x);
             double target_dist = sqrt(pow(target_x,2)+pow(target_y,2));
             double x_step_add = 0;
