@@ -9,6 +9,9 @@ The goals / steps of this project are the following:
 maximum jerk and acceleration of 10 m/s^3 and 10 m/s^2, avoid collisions,
 spend no more than 3 seconds outside the lane lines and also be able to change lanes.
 
+[//]: # (Image References)
+
+[image1]: ./examples/Screenshot.png "Screenshot"
 __
 
 ## Reflection
@@ -307,3 +310,5 @@ During the lane change states, the vehicle would transition back to POSITION_VEL
 ```
 
 As shown with the screenshot below, the car was able to safely drive 10 miles without any incidents.
+
+![alt text][image1]
